@@ -89,9 +89,47 @@ const Chat = () => {
       请用第一人称（我）回答用户的问题。
     `;
 
+    // 策略分流：
+    // 1. 本地开发 (DEV)：直接调用 API (方便调试，读取 .env.local)
+    // 2. 生产环境 (PROD)：调用 /api/chat 后端代理 (安全，隐藏 Key)
+    if (import.meta.env.DEV && import.meta.env.VITE_API_KEY) {
+      try {
+        const apiKey = import.meta.env.VITE_API_KEY;
+        const apiUrl = import.meta.env.VITE_API_URL || 'https://api.minimax.chat/v1/chat/completions';
+        
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              ...messages.filter(m => m.id !== 1).map(m => ({
+                role: m.sender === 'user' ? 'user' : 'assistant',
+                content: m.text
+              })),
+              { role: "user", content: userMessage }
+            ],
+            temperature: 0.7,
+            max_tokens: 300
+          })
+        });
+
+        if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+        const data = await response.json();
+        let content = data.choices[0].message.content;
+        return content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      } catch (error) {
+        console.error("Local LLM Call Failed:", error);
+        return getKeywordResponse(userMessage) + " (本地调用失败)";
+      }
+    }
+
+    // 生产环境：走 Vercel Serverless 代理
     try {
-      // 优先使用 Vercel/Serverless 后端代理 (隐藏 Key)
-      // 如果是在本地开发且没有后端服务，可能需要回退逻辑，但为了安全，我们默认推向 /api/chat
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
